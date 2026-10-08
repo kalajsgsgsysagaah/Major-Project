@@ -10,10 +10,9 @@ from app.config import settings
 
 # Models confirmed working on this API key
 FALLBACK_MODELS = [
-    "gemini-3.5-flash",    # primary — confirmed working
-    "gemini-3.7-flash",    # fallback 1
-    "gemini-3.8-flash",    # fallback 2
-    "gemini-flash-latest", # alias fallback
+    "gemini-3.8-flash",      # primary — latest recommended by API
+    "gemini-3.5-flash",      # fallback 1 — stable
+    "gemini-3.5-flash-lite", # fallback 2 — lightweight
 ]
 
 
