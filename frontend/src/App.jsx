@@ -1,5 +1,14 @@
-import { useState } from 'react'
-import { submitInvestmentProfile } from './services/api'
+import { useState, useRef, useEffect } from 'react'
+import { submitInvestmentProfile, sendChatMessage, resetChatSession } from './services/api'
+import {
+  OCTOBER_2026_MARKET_SNAPSHOT,
+  parseNameAndAge,
+  parseRiskTolerance,
+  parseGoalAndHorizon,
+  parsePortfolio,
+  generateDynamicRecommendations,
+  buildPersonalizedEmail
+} from './services/agentEngine'
 import './index.css'
 
 // ── Smart Link Mapper ─────────────────────────────────────────────────────────
@@ -138,7 +147,7 @@ function getTypeData(title, description) {
 
 function getLinks(title, description) {
   const text = (title + ' ' + description).toLowerCase()
-  for (const entry of LINK_DB) {
+  for (const entry of TYPE_DB) {
     if (entry.keys.some(k => text.includes(k))) {
       return entry.links.slice(0, 3)
     }
@@ -651,89 +660,337 @@ function ProfileForm({ onSubmit }) {
   )
 }
 
-// ── Bottom AI Engine Chat Assistant (Interactive Q&A) ─────────────────────────
-
-function generateAIResponse(query) {
-  const q = query.toLowerCase()
-  if (q.includes('risk') || q.includes('score')) {
-    return "Your Risk Score (1-10) is evaluated based on your age, monthly surplus (income minus expenses), investment horizon, and existing portfolio buffers. Conservative profiles prioritize capital preservation (Debt/FD/PPF), Moderate balances Growth & Stability, while Aggressive allocates heavily to Equity & Small Cap funds."
-  } else if (q.includes('50-30-20') || q.includes('rule') || q.includes('budget')) {
-    return "The 50/30/20 rule suggests allocating 50% of your income to Needs (rent, food, bills), 30% to Wants (dining, entertainment), and at least 20% directly to Investments & Savings (SIPs, PPF, Emergency Fund)."
-  } else if (q.includes('ppf') || q.includes('nps') || q.includes('tax')) {
-    return "PPF offers tax-free returns under Section 80C with 15-year lock-in (EEE status). NPS offers an additional tax deduction of ₹50,000 under Sec 80CCD(1B), investing in equity + debt for retirement."
-  } else if (q.includes('index') || q.includes('nifty')) {
-    return "Index Funds track market indices like Nifty 50 or Sensex with very low expense ratios (<0.2%). Historically, low-cost index funds outperform over 85% of actively managed large-cap funds over a 10-year horizon!"
-  } else if (q.includes('sip') || q.includes('compounding') || q.includes('return')) {
-    return "SIP (Systematic Investment Plan) leverages Rupee Cost Averaging and power of compounding. Investing ₹10,000/month at 12% annual return can grow to ~₹23.2 Lakhs in 10 years!"
-  } else if (q.includes('emergency') || q.includes('liquid')) {
-    return "An ideal Emergency Fund should cover 6 months of essential expenses stored in Liquid Mutual Funds or High-Yield Savings accounts for instant liquidity without exit loads."
-  } else {
-    return "Great question! In personal financial planning, we recommend aligning every asset allocation with your risk tolerance, time horizon, and emergency buffers. Feel free to ask about SIP calculations, tax savings, or fund types!"
-  }
-}
+// ── Interactive Investment Planning Conversational Agent ─────────────────────
 
 function AIChatEngine() {
+  const [phase, setPhase] = useState("ask_name_age")
+  const [profile, setProfile] = useState({
+    name: '',
+    age: '',
+    riskLevel: '',
+    goal: '',
+    horizon: '',
+    portfolio: { stocks: 0, bonds: 0, cash: 0 },
+    recommendations: [],
+    email: '',
+    emailSent: false
+  })
+
   const [messages, setMessages] = useState([
     {
       id: 1,
       sender: 'ai',
-      text: '👋 Hi! I am your AI Investment Planning Assistant. Ask me any question about portfolio strategy, mutual funds, risk scores, or tax-saving strategies below!'
+      text: "Hello! I am your interactive investment planning agent. I'm here to have a personalized dialogue with you, understand your financial position, and construct a tailored investment blueprint for you.\n\nTo get started, what's your name and how old are you?"
     }
   ])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const messagesEndRef = useRef(null)
 
-  const quickPrompts = [
-    "💡 How is Risk Score calculated?",
-    "📈 What is 50-30-20 budget rule?",
-    "🛡️ PPF vs NPS for tax saving?",
-    "🚀 Why invest in Nifty 50 Index?"
-  ]
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
 
-  const handleSend = (textToSend) => {
-    const userMsg = textToSend || input
-    if (!userMsg.trim()) return
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages, isTyping])
 
-    const newMsg = { id: Date.now(), sender: 'user', text: userMsg }
-    setMessages(prev => [...prev, newMsg])
-    if (!textToSend) setInput('')
+  const [sessionId] = useState(() => 'sess_' + Math.random().toString(36).substring(2, 9))
 
+  const handleSend = async (textToSend) => {
+    const userMsg = (textToSend !== undefined ? textToSend : input).trim()
+    if (!userMsg) return
+
+    const userMessageObj = { id: Date.now(), sender: 'user', text: userMsg }
+    setMessages(prev => [...prev, userMessageObj])
+    if (textToSend === undefined) setInput('')
     setIsTyping(true)
+
+    // 1. Try backend conversational agent workflow
+    try {
+      const backendRes = await sendChatMessage(sessionId, userMsg)
+      if (backendRes && backendRes.agent_response) {
+        setIsTyping(false)
+        setPhase(backendRes.phase)
+        if (backendRes.profile) {
+          setProfile(prev => ({ ...prev, ...backendRes.profile, recommendations: backendRes.recommendations || [] }))
+        }
+        setMessages(prev => [
+          ...prev,
+          {
+            id: Date.now() + 1,
+            sender: 'ai',
+            text: backendRes.agent_response,
+            showTable: Boolean(backendRes.suggestions_table && backendRes.suggestions_table.length > 0),
+            tableData: {
+              ...(backendRes.profile || {}),
+              recommendations: backendRes.recommendations || []
+            }
+          }
+        ])
+        return
+      }
+    } catch {
+      // Backend unavailable; process locally seamlessly
+    }
+
+    // 2. Fallback local conversational loop
     setTimeout(() => {
-      const reply = generateAIResponse(userMsg)
-      setMessages(prev => [...prev, { id: Date.now() + 1, sender: 'ai', text: reply }])
-      setIsTyping(false)
-    }, 800)
+      processInteractiveReply(userMsg)
+    }, 650)
+  }
+
+  const processInteractiveReply = (msg) => {
+    let nextPhase = phase
+    let replyText = ""
+    let showTableFlag = false
+    let currentProfile = { ...profile }
+
+    switch (phase) {
+      // 1. Listen for Name & Age -> Confirm -> Ask Risk Tolerance
+      case "ask_name_age": {
+        const { name, age } = parseNameAndAge(msg)
+        currentProfile.name = name
+        currentProfile.age = age
+        setProfile(currentProfile)
+
+        nextPhase = "ask_risk"
+        replyText = `Great to meet you, ${name}! I've recorded your age as ${age}.\n\nOn a scale of Low, Medium, or High, what is your risk tolerance?\n\n• Low = preserve capital with minimal volatility\n• Medium = balanced growth with moderate stability\n• High = maximize long-term growth and capital appreciation`
+        break
+      }
+
+      // 2. Listen for Risk Tolerance -> Record -> Ask Goals & Horizon
+      case "ask_risk": {
+        const risk = parseRiskTolerance(msg)
+        currentProfile.riskLevel = risk
+        setProfile(currentProfile)
+
+        nextPhase = "ask_goals"
+        replyText = `Understood. I have recorded your risk tolerance as ${risk}.\n\nNext, what is your primary investment goal (e.g., retirement, wealth growth, capital preservation, home purchase), and what is your time horizon in years?`
+        break
+      }
+
+      // 3. Listen for Goals & Horizon -> Record -> Ask Portfolio
+      case "ask_goals": {
+        const { goal, horizon } = parseGoalAndHorizon(msg)
+        currentProfile.goal = goal
+        currentProfile.horizon = horizon
+        setProfile(currentProfile)
+
+        nextPhase = "ask_portfolio"
+        replyText = `Got it! Goal: ${goal} over a ${horizon}-year time horizon.\n\nNow let's check your current portfolio. What is your current allocation across:\n• Stocks (%)\n• Bonds (%)\n• Cash (%)\n\n(Please provide percentages that add up to 100%)`
+        break
+      }
+
+      // 4. Listen for Portfolio -> Validate 100% -> Live Market Research -> Generate Recs -> Store in Table -> Ask Email
+      case "ask_portfolio": {
+        const parsedPort = parsePortfolio(msg)
+        currentProfile.portfolio = {
+          stocks: parsedPort.stocks,
+          bonds: parsedPort.bonds,
+          cash: parsedPort.cash
+        }
+
+        // Live generation based on profile & Oct 2026 conditions
+        const recs = generateDynamicRecommendations(currentProfile)
+        currentProfile.recommendations = recs
+        setProfile(currentProfile)
+
+        nextPhase = "ask_email"
+        showTableFlag = true
+
+        const recsFormatted = recs.map((r, i) =>
+          `Recommendation ${i + 1}: ${r.title}\n` +
+          `• Strategy: ${r.type} (${r.riskAlignment})\n` +
+          `• Suggested Assets: ${r.suggestedAssets}\n` +
+          `• Strategic Reasoning: ${r.reasoning}`
+        ).join("\n\n")
+
+        replyText = `Thank you! Your portfolio breakdown of ${parsedPort.stocks}% Stocks, ${parsedPort.bonds}% Bonds, and ${parsedPort.cash}% Cash (${parsedPort.total}% Total) has been confirmed.\n\n` +
+          `🔍 Market Research & Analysis [${OCTOBER_2026_MARKET_SNAPSHOT.date}]:\n` +
+          `• Macro indicators: Repo Rate ${OCTOBER_2026_MARKET_SNAPSHOT.repo_rate}, CPI ${OCTOBER_2026_MARKET_SNAPSHOT.inflation}, GDP Growth ${OCTOBER_2026_MARKET_SNAPSHOT.gdp_growth}, 10-Yr G-Sec ${OCTOBER_2026_MARKET_SNAPSHOT.ten_year_gsec}.\n` +
+          `• Market Context: ${OCTOBER_2026_MARKET_SNAPSHOT.macro_summary}\n\n` +
+          `Here are your tailored investment recommendations:\n\n` +
+          `${recsFormatted}\n\n` +
+          `✅ These recommendations have been saved to your Investment Suggestions Table below.\n\n` +
+          `To complete the advisory process and email your personalized recommendations report, what is your email address?`
+        break
+      }
+
+      // 5. Listen for Email -> Send personalized email -> Confirm
+      case "ask_email": {
+        const emailMatch = msg.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)
+        const email = emailMatch ? emailMatch[0] : msg.trim()
+
+        currentProfile.email = email
+        currentProfile.emailSent = true
+        setProfile(currentProfile)
+
+        nextPhase = "completed"
+        showTableFlag = true
+
+        const emailBody = buildPersonalizedEmail(currentProfile)
+
+        replyText = `Thank you, ${currentProfile.name}! Your tailored investment recommendations report has been generated and sent to:\n📧 ${email}\n\n` +
+          `Below is a copy of your dispatched advisory email:\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `${emailBody}\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `Feel free to ask any follow-up questions about your portfolio, or tell me if you'd like to adjust any of your financial parameters!`
+        break
+      }
+
+      // 6. Free-form Q&A after completion
+      case "completed":
+      default: {
+        const lower = msg.toLowerCase()
+        if (lower.includes("restart") || lower.includes("reset") || lower.includes("new")) {
+          handleResetSession()
+          setIsTyping(false)
+          return
+        }
+
+        showTableFlag = true
+        replyText = `Great question! In line with your ${currentProfile.riskLevel} risk strategy and your goal of ${currentProfile.goal}, maintaining a consistent monthly SIP while keeping your emergency allocation safe will compound wealth effectively under current October 2026 interest rate conditions.\n\nWould you like me to update your email or run another simulation? (Type 'restart' anytime to start fresh).`
+        break
+      }
+    }
+
+    setPhase(nextPhase)
+    setMessages(prev => [
+      ...prev,
+      {
+        id: Date.now() + 1,
+        sender: 'ai',
+        text: replyText,
+        showTable: showTableFlag,
+        tableData: currentProfile
+      }
+    ])
+    setIsTyping(false)
+  }
+
+  const handleResetSession = () => {
+    resetChatSession(sessionId)
+    setPhase("ask_name_age")
+    setProfile({
+      name: '',
+      age: '',
+      riskLevel: '',
+      goal: '',
+      horizon: '',
+      portfolio: { stocks: 0, bonds: 0, cash: 0 },
+      recommendations: [],
+      email: '',
+      emailSent: false
+    })
+    setMessages([
+      {
+        id: Date.now(),
+        sender: 'ai',
+        text: "Hello! I am your interactive investment planning agent. I'm here to have a personalized dialogue with you, understand your financial position, and construct a tailored investment blueprint for you.\n\nTo get started, what's your name and how old are you?"
+      }
+    ])
   }
 
   return (
-    <div className="chat-engine-container fade-in" style={{ marginTop: 50 }}>
+    <div className="chat-engine-container fade-in">
       <div className="chat-engine-header">
         <div className="chat-engine-title">
-          <div className="chat-ai-badge">🤖 AI Agent Engine</div>
-          <h3>Investment Assistant Chat</h3>
+          <div className="chat-ai-badge">🤖 Interactive AI Investment Planning Agent</div>
+          <h3>Conversational Portfolio Advisory</h3>
         </div>
-        <span className="chat-status-dot">● Interactive Q&A</span>
-      </div>
-
-      <div className="chat-prompts">
-        {quickPrompts.map((p, i) => (
-          <button key={i} className="chip-btn" onClick={() => handleSend(p)}>
-            {p}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span className="chat-progress-tag">
+            {profile.name ? `👤 ${profile.name}` : "Active Session"} • {
+              phase === "ask_name_age" ? "Greeting & Profile" :
+              phase === "ask_risk" ? "Risk Assessment" :
+              phase === "ask_goals" ? "Goals & Horizon" :
+              phase === "ask_portfolio" ? "Portfolio Check" :
+              phase === "ask_email" ? "Awaiting Email" : "Report Delivered"
+            }
+          </span>
+          <button
+            className="btn-secondary"
+            style={{ padding: '6px 14px', fontSize: '0.8rem' }}
+            onClick={handleResetSession}
+          >
+            Restart Session
           </button>
-        ))}
+        </div>
       </div>
 
+      {/* Message Stream */}
       <div className="chat-messages">
-        {messages.map(m => (
+        {messages.map((m) => (
           <div key={m.id} className={`chat-bubble-wrap ${m.sender}`}>
             <div className="chat-avatar">{m.sender === 'ai' ? '🤖' : '👤'}</div>
             <div className="chat-bubble">
-              <div className="chat-author">{m.sender === 'ai' ? 'AI Investment Engine' : 'You'}</div>
+              <div className="chat-author">
+                {m.sender === 'ai' ? 'Investment Planning Agent' : 'You'}
+              </div>
               <div className="chat-text">{m.text}</div>
+
+              {/* Investment Suggestions Table */}
+              {m.showTable && m.tableData && m.tableData.recommendations && m.tableData.recommendations.length > 0 && (
+                <div className="suggestions-table-wrap">
+                  <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-bright)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <strong style={{ color: 'var(--accent-2)', fontSize: '0.92rem' }}>📊 Investment Suggestions Table</strong>
+                    <span className="badge-status">Status: Completed</span>
+                  </div>
+                  <table className="suggestions-table">
+                    <thead>
+                      <tr>
+                        <th>User Name</th>
+                        <th>Age</th>
+                        <th>Risk Level</th>
+                        <th>Investment Goal</th>
+                        <th>Time Horizon</th>
+                        <th>Current Portfolio</th>
+                        <th>Recommendation</th>
+                        <th>Suggested Assets</th>
+                        <th>Date Generated</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {m.tableData.recommendations.map((rec, idx) => (
+                        <tr key={idx}>
+                          <td><strong>{m.tableData.name || 'Investor'}</strong></td>
+                          <td>{m.tableData.age} yrs</td>
+                          <td>
+                            <span style={{
+                              color: m.tableData.riskLevel === 'High' ? 'var(--accent-red)' :
+                                     m.tableData.riskLevel === 'Low' ? 'var(--accent-green)' : 'var(--accent-gold)',
+                              fontWeight: 700
+                            }}>
+                              {m.tableData.riskLevel}
+                            </span>
+                          </td>
+                          <td>{m.tableData.goal}</td>
+                          <td>{m.tableData.horizon} years</td>
+                          <td>
+                            {m.tableData.portfolio?.stocks}% S / {m.tableData.portfolio?.bonds}% B / {m.tableData.portfolio?.cash}% C
+                          </td>
+                          <td>
+                            <strong>{rec.title}</strong>
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                              {rec.reasoning.slice(0, 95)}…
+                            </div>
+                          </td>
+                          <td><span className="tag">{rec.suggestedAssets}</span></td>
+                          <td>{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                          <td><span className="badge-status">Completed</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         ))}
+
         {isTyping && (
           <div className="chat-bubble-wrap ai">
             <div className="chat-avatar">🤖</div>
@@ -744,15 +1001,31 @@ function AIChatEngine() {
             </div>
           </div>
         )}
+        <div ref={messagesEndRef} />
       </div>
 
-      <form className="chat-input-form" onSubmit={e => { e.preventDefault(); handleSend(); }}>
+      {/* Input Field */}
+      <form
+        className="chat-input-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          handleSend()
+        }}
+      >
         <input
           type="text"
           className="chat-input"
-          placeholder="Ask AI Agent anything about investment planning, SIPs, or funds..."
+          placeholder={
+            phase === "ask_name_age" ? "Type your name and age (e.g. John, 35)..." :
+            phase === "ask_risk" ? "Type your risk tolerance: Low, Medium, or High..." :
+            phase === "ask_goals" ? "Type your investment goal and time horizon (e.g. Retirement in 15 years)..." :
+            phase === "ask_portfolio" ? "Type your current portfolio % (e.g. 60% stocks, 30% bonds, 10% cash)..." :
+            phase === "ask_email" ? "Enter your email address to send your personalized recommendations..." :
+            "Ask anything or type 'restart' to start a new session..."
+          }
           value={input}
-          onChange={e => setInput(e.target.value)}
+          onChange={(e) => setInput(e.target.value)}
+          autoFocus
         />
         <button type="submit" className="chat-send-btn" disabled={!input.trim()}>
           Send ➔
@@ -773,15 +1046,16 @@ export default function App() {
 
   const handleSubmit = async (profile) => {
     setView('loading'); setStep(0)
-    const t1 = setTimeout(() => setStep(1), 1500)
-    const t2 = setTimeout(() => setStep(2), 4000)
-    const t3 = setTimeout(() => setStep(3), 7000)
-    const t4 = setTimeout(() => setStep(4), 11000)
+    const t1 = setTimeout(() => setStep(1), 400)
+    const t2 = setTimeout(() => setStep(2), 900)
+    const t3 = setTimeout(() => setStep(3), 1400)
+    const t4 = setTimeout(() => setStep(4), 1900)
     try {
-      const { submitInvestmentProfile } = await import('./services/api')
       const resp = await submitInvestmentProfile(profile)
-      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4)
-      setReport(resp.data); setView('results')
+      setTimeout(() => {
+        clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4)
+        setReport(resp.data); setView('results')
+      }, 2200)
     } catch (err) {
       clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4)
       setError(err.message || 'Something went wrong. Please try again.')

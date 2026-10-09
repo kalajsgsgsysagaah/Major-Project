@@ -54,7 +54,7 @@ def report_node(state: AgentState) -> AgentState:
             "Past performance does not guarantee future returns."
         ),
 
-        "model_used": "gemini-3.6-flash",
+        "model_used": "gemini-2.0-flash",
         "error": state.get("error"),
     }
 

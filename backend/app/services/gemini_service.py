@@ -8,11 +8,11 @@ from google import genai
 from google.genai import types
 from app.config import settings
 
-# Models confirmed working on this API key
+# Models confirmed working — ordered by capability
 FALLBACK_MODELS = [
-    "gemini-3.8-flash",      # primary — latest recommended by API
-    "gemini-3.5-flash",      # fallback 1 — stable
-    "gemini-3.5-flash-lite", # fallback 2 — lightweight
+    "gemini-2.0-flash",      # primary — fastest, cheapest, recommended
+    "gemini-1.5-flash",      # fallback 1 — stable
+    "gemini-1.5-flash-8b",   # fallback 2 — lightweight
 ]
 
 

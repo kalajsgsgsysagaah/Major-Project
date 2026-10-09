@@ -4,9 +4,8 @@ python-dotenv==1.0.1
 pydantic==2.13.5
 pydantic-settings==2.15.0
 
-# Google Gemini
-google-generativeai==0.8.6
-langchain-google-genai==4.4.0
+# Google Gemini (new unified SDK — used by gemini_service.py)
+google-genai>=1.16.0
 
 # LangGraph Agentic Workflow
 langgraph==1.2.11
@@ -19,3 +18,6 @@ yfinance==1.7.0
 
 # HTTP
 httpx==0.28.1
+
+# JSON utilities
+json-repair>=0.30.0

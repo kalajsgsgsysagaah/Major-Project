@@ -76,3 +76,74 @@ async def analyze_investment_profile(profile: InvestmentProfileRequest):
             status_code=500,
             detail=f"Unexpected error: {str(e)}",
         )
+
+
+# ─── Stateful LLM Conversational Agent Store ────────────────────────────────
+from pydantic import BaseModel
+from app.agents.llm_agent import llm_agent
+from app.agents.conversational_agent import process_agent_turn
+
+CONVERSATION_SESSIONS = {}
+
+class ChatMessageRequest(BaseModel):
+    session_id: str
+    message: str
+
+@router.post("/chat", summary="Interactive LLM Conversational Agent Turn")
+async def chat_with_agent(req: ChatMessageRequest):
+    """
+    Genuine interactive conversational dialogue powered by Google Gemini LLM.
+    Understands context, answers questions in detail (e.g. risk tolerance explanations),
+    gathers info dynamically, generates personalized plans, and sends email summaries.
+    """
+    session_id = req.session_id or "default_session"
+    user_msg = (req.message or "").strip()
+
+    try:
+        # 1. Primary: Run LLM multi-turn chat (ChatGPT / Claude style)
+        response_text = llm_agent.process_message(session_id, user_msg)
+        
+        return {
+            "session_id": session_id,
+            "agent_response": response_text,
+            "mode": "llm"
+        }
+    except Exception as llm_err:
+        # 2. Fallback: Stateful rule engine
+        state = CONVERSATION_SESSIONS.get(session_id)
+        if not state:
+            state = {
+                "session_id": session_id,
+                "phase": "greet_and_collect",
+                "history": [],
+                "name": None,
+                "age": None,
+                "risk_level": None,
+                "goal": None,
+                "time_horizon_years": None,
+                "portfolio": None,
+                "recommendations": None,
+                "suggestions_table": None,
+                "email": None,
+                "email_summary": None,
+                "email_dispatched": False,
+                "error": None
+            }
+        updated_state = process_agent_turn(state, user_msg)
+        CONVERSATION_SESSIONS[session_id] = updated_state
+        return {
+            "session_id": session_id,
+            "agent_response": updated_state["agent_response"],
+            "mode": "fallback"
+        }
+
+
+@router.post("/chat/reset", summary="Reset Conversational Agent Session")
+async def reset_chat_session(req: ChatMessageRequest):
+    """Resets conversational session memory for a fresh start."""
+    session_id = req.session_id or "default_session"
+    llm_agent.reset_chat(session_id)
+    if session_id in CONVERSATION_SESSIONS:
+        del CONVERSATION_SESSIONS[session_id]
+    return {"status": "reset", "session_id": session_id}
+
